@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use App\Enums\OrderStatus;
+use App\Exceptions\InvalidOrderTransitionException;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -37,7 +39,34 @@ class Order extends Model
     }
 
     /**
-     * Verifica se os dados de uma compra são os mesmos que originaram este pedido.
+     * Pending orders whose payment deadline has passed.
+     */
+    public function scopeOverdue(Builder $query): void
+    {
+        $query->where('status', OrderStatus::Pending)->where('expires_at', '<=', now());
+    }
+
+    public function isOverdue(): bool
+    {
+        return $this->status === OrderStatus::Pending && ! $this->expires_at->isFuture();
+    }
+
+    /**
+     * Single entry point for status changes: validates the transition before saving.
+     *
+     * @throws InvalidOrderTransitionException
+     */
+    public function transitionTo(OrderStatus $next): void
+    {
+        if (! $this->status->canTransitionTo($next)) {
+            throw new InvalidOrderTransitionException($this, $next);
+        }
+
+        $this->update(['status' => $next]);
+    }
+
+    /**
+     * Verifies that the order's data matches a purchase request, for idempotency checks.
      *
      * @param  array<string, mixed>  $data
      */

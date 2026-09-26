@@ -55,6 +55,31 @@ class OrderService
     }
 
     /**
+     * Expires an overdue pending order and releases its reserved tickets back to the batch.
+     *
+     * Returns false when the order is no longer expirable (e.g. paid between the
+     * scheduler query and this call), which is an expected race, not an error.
+     */
+    public function expire(Order $order): bool
+    {
+        return DB::transaction(function () use ($order) {
+            $order = Order::lockForUpdate()->findOrFail($order->id);
+
+            if (! $order->isOverdue()) {
+                return false;
+            }
+
+            TicketBatch::lockForUpdate()
+                ->findOrFail($order->ticket_batch_id)
+                ->decrement('reserved_quantity', $order->quantity);
+
+            $order->transitionTo(OrderStatus::Expired);
+
+            return true;
+        });
+    }
+
+    /**
      * Finds the order for an Idempotency-Key, ensuring it matches the same purchase.
      *
      * @param  array<string, mixed>  $data
