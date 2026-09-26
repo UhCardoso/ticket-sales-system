@@ -2,22 +2,22 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\DB;
-use Exception;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class TicketBatch extends Model
 {
-    protected $fillable = ['event_id', 'name', 'price', 'total_quantity', 'sold_quantity'];
+    use HasFactory;
 
-    protected static function booted(): void
+    protected $fillable = ['event_id', 'name', 'price', 'total_quantity'];
+
+    protected function casts(): array
     {
-        static::creating(function (TicketBatch $batch) {
-            if (is_null($batch->remaining_quantity)) {
-                $batch->remaining_quantity = $batch->total_quantity;
-            }
-        });
+        return [
+            'price' => 'decimal:2',
+        ];
     }
 
     public function event(): BelongsTo
@@ -25,25 +25,13 @@ class TicketBatch extends Model
         return $this->belongsTo(Event::class);
     }
 
-    public function hasAvailable(): bool
+    public function orders(): HasMany
     {
-        return $this->remaining_quantity > 0;
+        return $this->hasMany(Order::class);
     }
 
-    public function sellOne(): void
+    public function availableQuantity(): int
     {
-        DB::transaction(function () {
-            $batch = static::query()->lockForUpdate()->findOrFail($this->id);
-
-            if (!$batch->hasAvailable()) {
-                throw new Exception("Este lote ({$batch->name}) está esgotado!");
-            }
-
-            $batch->increment('sold_quantity');
-            $batch->decrement('remaining_quantity');
-
-            $this->sold_quantity = $batch->sold_quantity;
-            $this->remaining_quantity = $batch->remaining_quantity;
-        });
+        return $this->total_quantity - $this->reserved_quantity - $this->sold_quantity;
     }
 }
