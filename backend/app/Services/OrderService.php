@@ -2,9 +2,12 @@
 
 namespace App\Services;
 
+use App\Contracts\PaymentGatewayInterface;
 use App\Enums\OrderStatus;
 use App\Exceptions\BatchSoldOutException;
 use App\Exceptions\IdempotencyKeyReusedException;
+use App\Exceptions\InvalidOrderTransitionException;
+use App\Jobs\IssueTickets;
 use App\Models\Order;
 use App\Models\TicketBatch;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -12,6 +15,8 @@ use Illuminate\Support\Facades\DB;
 
 class OrderService
 {
+    public function __construct(private readonly PaymentGatewayInterface $gateway) {}
+
     /**
      * Creates a pending order and reserves stock. Idempotent per key.
      *
@@ -23,11 +28,11 @@ class OrderService
         $existing = $this->findByIdempotencyKey($idempotencyKey, $data);
 
         if ($existing) {
-            return $existing;
+            return $this->charge($existing);
         }
 
         try {
-            return DB::transaction(function () use ($data, $idempotencyKey) {
+            $order = DB::transaction(function () use ($data, $idempotencyKey) {
                 $batch = TicketBatch::lockForUpdate()->findOrFail($data['ticket_batch_id']);
 
                 if ($batch->availableQuantity() < $data['quantity']) {
@@ -50,8 +55,78 @@ class OrderService
                 ]);
             });
         } catch (UniqueConstraintViolationException) {
-            return $this->findByIdempotencyKey($idempotencyKey, $data);
+            $order = $this->findByIdempotencyKey($idempotencyKey, $data);
         }
+
+        return $this->charge($order);
+    }
+
+    /**
+     * Confirms payment: the reservation becomes a sale and the post-payment effects run.
+     *
+     * The status change comes first so that an illegal transition fails before any
+     * counter moves. The effects are dispatched after the commit, never inside it — the
+     * worker would otherwise read a state that has not been committed yet.
+     *
+     * @throws InvalidOrderTransitionException
+     */
+    public function markAsPaid(Order $order): Order
+    {
+        $order = DB::transaction(function () use ($order) {
+            $order = Order::lockForUpdate()->findOrFail($order->id);
+            $order->transitionTo(OrderStatus::Paid);
+
+            TicketBatch::lockForUpdate()
+                ->findOrFail($order->ticket_batch_id)
+                ->confirmSale($order->quantity, $order->total);
+
+            return $order;
+        });
+
+        IssueTickets::dispatch($order)->afterCommit();
+
+        return $order;
+    }
+
+    /**
+     * Rejects payment and releases the reserved tickets back to the batch.
+     *
+     * @throws InvalidOrderTransitionException
+     */
+    public function reject(Order $order): Order
+    {
+        return DB::transaction(function () use ($order) {
+            $order = Order::lockForUpdate()->findOrFail($order->id);
+            $order->transitionTo(OrderStatus::Rejected);
+
+            TicketBatch::lockForUpdate()
+                ->findOrFail($order->ticket_batch_id)
+                ->releaseReservation($order->quantity);
+
+            return $order;
+        });
+    }
+
+    /**
+     * Refunds a paid order: the sold tickets go back to the batch and the issued tickets
+     * are invalidated, in the same transaction as the status change.
+     *
+     * @throws InvalidOrderTransitionException
+     */
+    public function refund(Order $order): Order
+    {
+        return DB::transaction(function () use ($order) {
+            $order = Order::lockForUpdate()->findOrFail($order->id);
+            $order->transitionTo(OrderStatus::Refunded);
+
+            TicketBatch::lockForUpdate()
+                ->findOrFail($order->ticket_batch_id)
+                ->returnSale($order->quantity, $order->total);
+
+            $order->tickets()->valid()->update(['invalidated_at' => now()]);
+
+            return $order;
+        });
     }
 
     /**
@@ -71,12 +146,32 @@ class OrderService
 
             TicketBatch::lockForUpdate()
                 ->findOrFail($order->ticket_batch_id)
-                ->decrement('reserved_quantity', $order->quantity);
+                ->releaseReservation($order->quantity);
 
             $order->transitionTo(OrderStatus::Expired);
 
             return true;
         });
+    }
+
+    /**
+     * Opens the payment charge for the order, once. The stored reference is the marker:
+     * a retried purchase reuses the charge instead of opening a second one.
+     */
+    private function charge(Order $order): Order
+    {
+        if ($order->payment_reference !== null) {
+            return $order;
+        }
+
+        $charge = $this->gateway->charge($order);
+
+        $order->update([
+            'payment_reference' => $charge->reference,
+            'payment_url' => $charge->checkoutUrl,
+        ]);
+
+        return $order;
     }
 
     /**

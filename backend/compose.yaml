@@ -24,6 +24,25 @@ services:
         depends_on:
             - mysql
             - redis
+    worker:
+        build:
+            context: './vendor/laravel/sail/runtimes/8.5'
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP}'
+        image: 'sail-8.5/app'
+        command: ['php', '/var/www/html/artisan', 'queue:work', '--tries=5']
+        environment:
+            WWWUSER: '${WWWUSER}'
+            LARAVEL_SAIL: 1
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - sail
+        depends_on:
+            - laravel.test
+            - mysql
+            - redis
     scheduler:
         build:
             context: './vendor/laravel/sail/runtimes/8.5'
@@ -91,6 +110,13 @@ services:
         environment:
             PMA_HOST: mysql
             MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
+        networks:
+            - sail
+    mailpit:
+        image: 'axllent/mailpit:latest'
+        ports:
+            - '${FORWARD_MAILPIT_PORT:-1025}:1025'
+            - '${FORWARD_MAILPIT_DASHBOARD_PORT:-8025}:8025'
         networks:
             - sail
 networks:

@@ -2,6 +2,7 @@
 
 use App\Exceptions\BatchSoldOutException;
 use App\Exceptions\IdempotencyKeyReusedException;
+use App\Exceptions\InvalidOrderTransitionException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -26,5 +27,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (IdempotencyKeyReusedException $e) => response()->json(
             ['message' => $e->getMessage()],
             Response::HTTP_UNPROCESSABLE_ENTITY,
+        ));
+
+        $exceptions->render(fn (InvalidOrderTransitionException $e) => response()->json(
+            ['message' => $e->getMessage()],
+            Response::HTTP_CONFLICT,
         ));
     })->create();

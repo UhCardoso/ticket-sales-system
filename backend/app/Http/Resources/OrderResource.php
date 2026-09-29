@@ -26,6 +26,10 @@ class OrderResource extends JsonResource
                 'email' => $this->buyer_email,
                 'document' => $this->buyer_document,
             ],
+            'payment' => [
+                'reference' => $this->payment_reference,
+                'checkout_url' => $this->payment_url,
+            ],
             'expires_at' => $this->expires_at->toIso8601String(),
             'created_at' => $this->created_at->toIso8601String(),
         ];

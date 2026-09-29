@@ -7,6 +7,8 @@ use App\Exceptions\InvalidOrderTransitionException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 class Order extends Model
 {
@@ -20,7 +22,11 @@ class Order extends Model
         'quantity',
         'unit_price',
         'total',
+        'payment_reference',
+        'payment_url',
         'expires_at',
+        'last_notification_at',
+        'tickets_issued_at',
     ];
 
     protected function casts(): array
@@ -30,12 +36,24 @@ class Order extends Model
             'unit_price' => 'decimal:2',
             'total' => 'decimal:2',
             'expires_at' => 'datetime',
+            'last_notification_at' => 'datetime',
+            'tickets_issued_at' => 'datetime',
         ];
     }
 
     public function ticketBatch(): BelongsTo
     {
         return $this->belongsTo(TicketBatch::class);
+    }
+
+    public function tickets(): HasMany
+    {
+        return $this->hasMany(Ticket::class);
+    }
+
+    public function gatewayNotifications(): HasMany
+    {
+        return $this->hasMany(GatewayNotification::class);
     }
 
     /**
@@ -49,6 +67,17 @@ class Order extends Model
     public function isOverdue(): bool
     {
         return $this->status === OrderStatus::Pending && ! $this->expires_at->isFuture();
+    }
+
+    /**
+     * Whether a notification that happened at the given instant is older than the last
+     * one already applied to this order, and must therefore be ignored.
+     *
+     * @param  $occurredAt  When the gateway says the notification happened
+     */
+    public function hasNewerNotificationThan(Carbon $occurredAt): bool
+    {
+        return $this->last_notification_at?->greaterThan($occurredAt) === true;
     }
 
     /**
