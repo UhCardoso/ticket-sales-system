@@ -26,7 +26,12 @@ class Order extends Model
         'payment_url',
         'expires_at',
         'last_notification_at',
+        'paid_at',
         'tickets_issued_at',
+        'receipt_sent_at',
+        'tickets_sent_at',
+        'financial_registered_at',
+        'financial_reference',
     ];
 
     protected function casts(): array
@@ -37,7 +42,11 @@ class Order extends Model
             'total' => 'decimal:2',
             'expires_at' => 'datetime',
             'last_notification_at' => 'datetime',
+            'paid_at' => 'datetime',
             'tickets_issued_at' => 'datetime',
+            'receipt_sent_at' => 'datetime',
+            'tickets_sent_at' => 'datetime',
+            'financial_registered_at' => 'datetime',
         ];
     }
 

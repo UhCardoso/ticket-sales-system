@@ -8,9 +8,13 @@ use App\Exceptions\BatchSoldOutException;
 use App\Exceptions\IdempotencyKeyReusedException;
 use App\Exceptions\InvalidOrderTransitionException;
 use App\Jobs\IssueTickets;
+use App\Jobs\RegisterInFinancialSystem;
+use App\Jobs\SendReceiptEmail;
+use App\Jobs\SendTicketsEmail;
 use App\Models\Order;
 use App\Models\TicketBatch;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 
 class OrderService
@@ -68,6 +72,10 @@ class OrderService
      * counter moves. The effects are dispatched after the commit, never inside it — the
      * worker would otherwise read a state that has not been committed yet.
      *
+     * One job per effect, so a retry of one (the financial system fails ~20% of calls)
+     * never repeats another. The tickets e-mail is chained after the issuance because it
+     * needs the tickets to exist; the other effects are independent and run in parallel.
+     *
      * @throws InvalidOrderTransitionException
      */
     public function markAsPaid(Order $order): Order
@@ -75,6 +83,7 @@ class OrderService
         $order = DB::transaction(function () use ($order) {
             $order = Order::lockForUpdate()->findOrFail($order->id);
             $order->transitionTo(OrderStatus::Paid);
+            $order->update(['paid_at' => now()]);
 
             TicketBatch::lockForUpdate()
                 ->findOrFail($order->ticket_batch_id)
@@ -83,7 +92,13 @@ class OrderService
             return $order;
         });
 
-        IssueTickets::dispatch($order)->afterCommit();
+        Bus::chain([
+            (new IssueTickets($order))->afterCommit(),
+            new SendTicketsEmail($order),
+        ])->dispatch();
+
+        SendReceiptEmail::dispatch($order)->afterCommit();
+        RegisterInFinancialSystem::dispatch($order)->afterCommit();
 
         return $order;
     }
