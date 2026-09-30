@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\OrderEmail;
 use App\Enums\OrderStatus;
 use App\Exceptions\InvalidOrderTransitionException;
 use Illuminate\Database\Eloquent\Builder;
@@ -28,7 +29,9 @@ class Order extends Model
         'last_notification_at',
         'paid_at',
         'tickets_issued_at',
+        'receipt_sending_at',
         'receipt_sent_at',
+        'tickets_sending_at',
         'tickets_sent_at',
         'financial_registered_at',
         'financial_reference',
@@ -44,7 +47,9 @@ class Order extends Model
             'last_notification_at' => 'datetime',
             'paid_at' => 'datetime',
             'tickets_issued_at' => 'datetime',
+            'receipt_sending_at' => 'datetime',
             'receipt_sent_at' => 'datetime',
+            'tickets_sending_at' => 'datetime',
             'tickets_sent_at' => 'datetime',
             'financial_registered_at' => 'datetime',
         ];
@@ -71,6 +76,27 @@ class Order extends Model
     public function scopeOverdue(Builder $query): void
     {
         $query->where('status', OrderStatus::Pending)->where('expires_at', '<=', now());
+    }
+
+    /**
+     * Orders paid before the given instant with a post-payment effect still owed.
+     *
+     * The e-mails and the tickets only count while the order is paid; the financial
+     * registration counts even after a refund, since the sale did happen. An e-mail
+     * already claimed (sent or in doubt) is not owed.
+     *
+     * @param  $paidBefore  Orders paid after this are still within their normal retries
+     */
+    public function scopeWithPendingEffects(Builder $query, Carbon $paidBefore): void
+    {
+        $query->where('paid_at', '<=', $paidBefore)->where(fn (Builder $query) => $query
+            ->whereNull('financial_registered_at')
+            ->orWhere(fn (Builder $query) => $query
+                ->where('status', OrderStatus::Paid)
+                ->where(fn (Builder $query) => $query
+                    ->whereNull('tickets_issued_at')
+                    ->orWhereNull('receipt_sending_at')
+                    ->orWhereNull('tickets_sending_at'))));
     }
 
     public function isOverdue(): bool
@@ -101,6 +127,49 @@ class Order extends Model
         }
 
         $this->update(['status' => $next]);
+    }
+
+    /**
+     * Claims the send of an e-mail, atomically: only one caller ever wins.
+     *
+     * The conditional UPDATE is the guarantee, not a prior read — two workers reading
+     * "not sent" at the same time would both send.
+     */
+    public function claimEmail(OrderEmail $email): bool
+    {
+        $claimed = static::whereKey($this->id)
+            ->whereNull($email->sendingColumn())
+            ->whereNull($email->sentColumn())
+            ->update([$email->sendingColumn() => now()]) === 1;
+
+        $this->refresh();
+
+        return $claimed;
+    }
+
+    /**
+     * Gives the claim back after a failure that certainly did not deliver the message.
+     */
+    public function releaseEmailClaim(OrderEmail $email): void
+    {
+        $this->update([$email->sendingColumn() => null]);
+    }
+
+    /**
+     * Records that the mail server accepted the message.
+     */
+    public function markEmailSent(OrderEmail $email): void
+    {
+        $this->update([$email->sentColumn() => now()]);
+    }
+
+    /**
+     * Whether the e-mail was claimed but never confirmed: it may or may not have gone out.
+     */
+    public function isEmailInDoubt(OrderEmail $email): bool
+    {
+        return $this->getAttribute($email->sendingColumn()) !== null
+            && $this->getAttribute($email->sentColumn()) === null;
     }
 
     /**

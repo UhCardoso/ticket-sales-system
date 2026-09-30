@@ -2,49 +2,35 @@
 
 namespace App\Jobs;
 
+use App\Enums\OrderEmail;
 use App\Enums\OrderStatus;
 use App\Mail\PaymentReceiptMail;
 use App\Models\Order;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Queue\Middleware\WithoutOverlapping;
-use Illuminate\Support\Facades\Mail;
+use Illuminate\Mail\Mailable;
 
-class SendReceiptEmail implements ShouldQueue
+class SendReceiptEmail extends SendOrderEmail
 {
-    use Queueable;
-
-    public int $tries = 5;
-
-    public array $backoff = [10, 30, 60];
-
-    public function __construct(private readonly Order $order) {}
-
     /**
-     * One run at a time per order, so two deliveries of this job cannot both pass the
-     * marker check and send twice.
+     * The payment receipt.
      */
-    public function middleware(): array
+    protected function email(): OrderEmail
     {
-        return [(new WithoutOverlapping($this->order->id))->releaseAfter(10)->expireAfter(120)];
+        return OrderEmail::Receipt;
     }
 
     /**
-     * Sends the payment receipt to the buyer, once.
-     *
-     * The marker is written right after the send succeeds: a failure before that retries
-     * the send, a retry after that finds the marker and does nothing.
+     * Only for an order still paid: a refund arriving first makes the receipt moot.
      */
-    public function handle(): void
+    protected function shouldSend(Order $order): bool
     {
-        $order = $this->order->refresh();
+        return $order->status === OrderStatus::Paid;
+    }
 
-        if ($order->receipt_sent_at !== null || $order->status !== OrderStatus::Paid) {
-            return;
-        }
-
-        Mail::to($order->buyer_email)->send(new PaymentReceiptMail($order));
-
-        $order->update(['receipt_sent_at' => now()]);
+    /**
+     * Receipt with the order's payment details.
+     */
+    protected function mailable(Order $order): Mailable
+    {
+        return new PaymentReceiptMail($order);
     }
 }

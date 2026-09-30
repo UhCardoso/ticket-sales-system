@@ -79,6 +79,18 @@ class PostPaymentEffectsTest extends TestCase
         $this->assertNotNull($order->financial_registered_at);
     }
 
+    public function test_financial_registration_runs_on_its_own_queue(): void
+    {
+        Queue::fake();
+
+        $order = $this->placeOrder(TicketBatch::factory()->create(['total_quantity' => 10]));
+        app(OrderService::class)->markAsPaid($order);
+
+        Queue::assertPushedOn('financial', RegisterInFinancialSystem::class);
+        // Os demais efeitos seguem na fila padrão, sem esperar pelo financeiro.
+        Queue::assertPushed(SendReceiptEmail::class, fn ($job) => $job->queue === null);
+    }
+
     public function test_tickets_pdf_is_generated_for_the_order(): void
     {
         $order = $this->paidOrder(2);

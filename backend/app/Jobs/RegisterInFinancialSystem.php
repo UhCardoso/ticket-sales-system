@@ -21,7 +21,14 @@ class RegisterInFinancialSystem implements ShouldQueue
 
     public array $backoff = [5, 15, 30, 60, 120, 300, 600];
 
-    public function __construct(private readonly Order $order) {}
+    /**
+     * Runs on its own queue and worker: at 2–5s per call, sharing the default queue would
+     * hold the tickets and e-mails of every sale behind the financial system.
+     */
+    public function __construct(private readonly Order $order)
+    {
+        $this->onQueue('financial');
+    }
 
     /**
      * One run at a time per order, so two deliveries of this job cannot both pass the
@@ -57,11 +64,12 @@ class RegisterInFinancialSystem implements ShouldQueue
     }
 
     /**
-     * Flags a sale left unregistered after every attempt, so it is not silently lost.
+     * Flags a sale left unregistered after every attempt. The orders:reconcile command
+     * dispatches it again later; the log makes a prolonged outage visible meanwhile.
      */
     public function failed(Throwable $exception): void
     {
-        Log::critical('Venda não registrada no sistema financeiro após todas as tentativas.', [
+        Log::critical('Venda ainda não registrada no sistema financeiro após todas as tentativas; a reconciliação tentará de novo.', [
             'order_id' => $this->order->id,
             'reason' => $exception->getMessage(),
         ]);

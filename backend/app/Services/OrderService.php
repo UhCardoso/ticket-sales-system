@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Contracts\PaymentGatewayInterface;
+use App\Enums\OrderEmail;
 use App\Enums\OrderStatus;
 use App\Exceptions\BatchSoldOutException;
 use App\Exceptions\IdempotencyKeyReusedException;
@@ -72,10 +73,6 @@ class OrderService
      * counter moves. The effects are dispatched after the commit, never inside it — the
      * worker would otherwise read a state that has not been committed yet.
      *
-     * One job per effect, so a retry of one (the financial system fails ~20% of calls)
-     * never repeats another. The tickets e-mail is chained after the issuance because it
-     * needs the tickets to exist; the other effects are independent and run in parallel.
-     *
      * @throws InvalidOrderTransitionException
      */
     public function markAsPaid(Order $order): Order
@@ -92,15 +89,50 @@ class OrderService
             return $order;
         });
 
-        Bus::chain([
-            (new IssueTickets($order))->afterCommit(),
-            new SendTicketsEmail($order),
-        ])->dispatch();
-
-        SendReceiptEmail::dispatch($order)->afterCommit();
-        RegisterInFinancialSystem::dispatch($order)->afterCommit();
+        $this->dispatchPendingEffects($order);
 
         return $order;
+    }
+
+    /**
+     * Dispatches a job for each post-payment effect whose marker is still empty.
+     *
+     * Used right after the payment and again by the reconciliation, so the markers — not
+     * the queue — are the record of what is still owed: a job lost by the queue, or one
+     * that exhausted its attempts, is dispatched again. Every job is idempotent, so
+     * dispatching one that is still queued is harmless. An e-mail in doubt is left out:
+     * resending it is exactly what must not happen.
+     *
+     * One job per effect, so a retry of one (the financial system fails ~20% of calls)
+     * never repeats another. The tickets e-mail is chained after the issuance because it
+     * needs the tickets to exist; the other effects are independent and run in parallel.
+     */
+    public function dispatchPendingEffects(Order $order): void
+    {
+        if ($order->tickets_issued_at === null) {
+            Bus::chain([
+                (new IssueTickets($order))->afterCommit(),
+                new SendTicketsEmail($order),
+            ])->dispatch();
+        } elseif ($this->isEmailPending($order, OrderEmail::Tickets)) {
+            SendTicketsEmail::dispatch($order)->afterCommit();
+        }
+
+        if ($this->isEmailPending($order, OrderEmail::Receipt)) {
+            SendReceiptEmail::dispatch($order)->afterCommit();
+        }
+
+        if ($order->financial_registered_at === null) {
+            RegisterInFinancialSystem::dispatch($order)->afterCommit();
+        }
+    }
+
+    /**
+     * Whether the e-mail was never claimed: neither sent nor in doubt.
+     */
+    private function isEmailPending(Order $order, OrderEmail $email): bool
+    {
+        return $order->getAttribute($email->sendingColumn()) === null;
     }
 
     /**
