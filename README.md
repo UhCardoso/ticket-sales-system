@@ -40,10 +40,6 @@ Três observações:
   dependência.
 - O `.env` é opcional: os valores de desenvolvimento já são os padrões do código.
 
-**Sem o backend no ar**, o painel carrega mas não mostra números — aparece um alerta de conexão e o
-polling segue tentando. É o esperado: exibir zeros seria inventar número. Quando o backend subir, os
-dados aparecem sozinhos.
-
 ### Scripts
 
 | Script | O que faz |
@@ -56,31 +52,52 @@ dados aparecem sozinhos.
 
 ---
 
-## Problemas comuns
-
-**`sh: 1: vite: not found`** — você está em `backend/`, não em `frontend/`. As duas pastas têm um
-script `dev`, mas o do backend é o scaffolding do Laravel e não tem dependências instaladas. No
-cabeçalho, `> dev` é o backend e `> frontend@0.0.0 dev` é o painel.
-
-**`npm warn EBADENGINE`, ou o CLI do shadcn-vue falhando** — Node abaixo de 22. Depois de trocar de
-versão, rode `npm ci` de novo.
-
-**"Port 5173 is in use"** — o Vite sobe na 5174 e avisa qual porta usou. Para fixar outra:
-`npm run dev -- --port 3000`.
-
-**O `.env.example` não aparece no `ls`** — é arquivo oculto, só aparece com `ls -a`. O `cp` funciona
-normalmente.
-
-**O painel abre mas só mostra o alerta de falha** — o backend não está no ar, ou está em outra porta.
-O proxy aponta para `API_PROXY_TARGET` (padrão `http://localhost:8000`), que precisa casar com o
-`APP_PORT` do `backend/.env`.
-
----
-
 ## Instalando o backend
 
-Em breve. Por ora, o resumo do ambiente local (Sail, workers, scheduler, Mailpit) está em
-[Ambiente local](#ambiente-local).
+| Ferramenta | Versão |
+|---|---|
+| Docker Engine | com Compose v2 (`docker compose`, sem hífen) |
+| PHP e Composer no host | PHP 8.2+ e Composer 2 — só para o primeiro `composer install` |
+
+O PHP do host é necessário por um motivo específico: o `compose.yaml` aponta para
+`./vendor/laravel/sail/runtimes/8.5`, e o próprio `./vendor/bin/sail` só existe depois que as
+dependências são instaladas. Ou seja, não há como subir os containers antes do `composer install`.
+Depois dessa etapa, tudo roda dentro do Docker — a versão do PHP do host não importa mais, porque o
+container usa 8.5.
+
+```bash
+cd ticket-sales-system/backend
+composer install
+cp .env.example .env
+./vendor/bin/sail up -d
+./vendor/bin/sail artisan key:generate
+./vendor/bin/sail artisan migrate --seed
+```
+
+O `sail up` da primeira vez constrói a imagem do PHP 8.5 e demora alguns minutos. O `--seed` carrega
+dois eventos com dois lotes cada, que é o que o painel precisa para ter o que mostrar.
+
+Depois disso:
+
+| Endereço | O que é |
+|---|---|
+| http://localhost:8000/api | a API |
+| http://localhost:8025 | Mailpit — os e-mails de comprovante e de ingressos |
+| http://localhost:8080 | phpMyAdmin |
+
+Duas observações:
+
+- **Suba sempre pelo `./vendor/bin/sail up`, nunca com `docker compose up` direto.** O script `sail`
+  exporta `WWWUSER`/`WWWGROUP` com o seu uid. Sem isso o usuário do container perde o mapeamento,
+  os workers não sobem e a aplicação não consegue escrever em `storage/logs`.
+- **A `APP_PORT` do backend precisa casar com o `API_PROXY_TARGET` do frontend.** Ambos vêm como
+  `8000` nos `.env.example`; se você mudar um, mude o outro.
+
+Com os dois lados no ar, o painel em http://localhost:5173 passa a mostrar os números.
+
+Para ver o fluxo de pagamento funcionando, veja
+[Simulando os avisos do gateway](#simulando-os-avisos-do-gateway). Os serviços que precisam estar de
+pé para os efeitos acontecerem estão em [Ambiente local](#ambiente-local).
 
 ---
 
