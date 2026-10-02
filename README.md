@@ -5,73 +5,52 @@ Sistema de venda de ingressos com confirmação de pagamento assíncrona via gat
 - `backend/` — API em Laravel 12 (PHP 8.5, MySQL 8.4, Redis, Sail)
 - `frontend/` — painel de vendas em Vue 3 + TypeScript + Vite
 
-O repositório tem as duas partes e elas sobem de forma independente. Este guia cobre a
-**instalação do painel (`frontend/`)**; a do backend vem a seguir.
+As duas partes sobem de forma independente. Este guia cobre o painel; o backend vem a seguir.
 
 ---
 
-## Requisitos mínimos
+## Requisitos
 
-Para rodar o painel:
+Só para o painel. Não precisa de Docker, PHP nem banco de dados.
 
-| O quê | Versão | Por quê |
-|---|---|---|
-| **Git** | qualquer recente | clonar o repositório |
-| **Node.js** | **22.22+** ou **24.15+** | é o `engines` do `package.json`; algumas dependências exigem `>=22` |
-| **npm** | 10+ | vem junto com o Node |
+| Ferramenta | Versão |
+|---|---|
+| Git | qualquer recente |
+| Node.js | 22.22+ ou 24.15+ (é o `engines` do `package.json`) |
+| npm | 10+, vem junto com o Node |
 
-## Instalando o painel do zero
+## Instalando o painel
 
 ```bash
-# 1. clonar o repositório
 git clone git@github.com:UhCardoso/ticket-sales-system.git
-
-# 2. entrar na pasta do painel
 cd ticket-sales-system/frontend
-
-# 3. instalar as dependências exatamente como estão no lockfile
 npm ci
-
-# 4. criar o .env a partir do exemplo
 cp .env.example .env
-
-# 5. subir o servidor de desenvolvimento
 npm run dev
 ```
 
 Abra **http://localhost:5173** — a rota `/` redireciona para `/painel`.
 
-Notas sobre os passos:
+Três observações:
 
-- **O clone já vem na branch certa.** A branch padrão do repositório é a `main`, que tem o projeto
-  completo — não precisa passar `-b`. Se preferir HTTPS ao SSH, troque a URL por
-  `https://github.com/UhCardoso/ticket-sales-system.git`; o repositório é privado, então de
-  qualquer forma é preciso ter acesso a ele.
-- **`npm ci`, não `npm install`.** O `ci` instala exatamente as versões do `package-lock.json`, que
-  é o que torna a instalação reproduzível. Use `npm install` só quando for mudar dependência.
-- **O `.env` é opcional**, porque os valores de desenvolvimento já são os padrões do código. Copie
-  de todo jeito: é mais fácil ajustar um arquivo que existe do que descobrir que ele faltava.
+- O clone já vem na `main`, que tem o projeto completo. Por HTTPS, use
+  `https://github.com/UhCardoso/ticket-sales-system.git`. O repositório é privado, então é preciso
+  ter acesso.
+- `npm ci` instala exatamente as versões do `package-lock.json`. Use `npm install` só para mudar
+  dependência.
+- O `.env` é opcional: os valores de desenvolvimento já são os padrões do código.
 
-### O que você vê sem o backend rodando
+**Sem o backend no ar**, o painel carrega mas não mostra números — aparece um alerta de conexão e o
+polling segue tentando. É o esperado: exibir zeros seria inventar número. Quando o backend subir, os
+dados aparecem sozinhos.
 
-O painel carrega, mas **não mostra número nenhum** — aparece um alerta vermelho ("Não foi possível
-falar com o servidor") e o polling segue tentando a cada 5s. Isso é o comportamento desenhado, não
-um defeito: sem nenhuma leitura válida da API, exibir tiles zerados apresentaria número inventado
-como se fosse fato. Assim que o backend subir, os dados aparecem sozinhos, sem recarregar a página.
-
-### Verificando o build
-
-```bash
-npm run type-check     # vue-tsc, sem emitir nada
-npm run build          # type-check + build de produção em dist/
-npm run preview        # serve o dist/ para conferir o build
-```
+### Scripts
 
 | Script | O que faz |
 |---|---|
 | `npm run dev` | servidor de desenvolvimento com HMR |
-| `npm run build` | `type-check` e build de produção, em paralelo |
-| `npm run build-only` | só o build, sem checar tipos |
+| `npm run build` | checagem de tipos e build de produção em `dist/` |
+| `npm run build-only` | build sem checar tipos |
 | `npm run type-check` | só a checagem de tipos |
 | `npm run preview` | serve o `dist/` já buildado |
 
@@ -79,34 +58,29 @@ npm run preview        # serve o dist/ para conferir o build
 
 ## Problemas comuns
 
-**`sh: 1: vite: not found`**
-Você está em `backend/`, não em `frontend/`. As duas pastas têm um script `dev` que chama o `vite`,
-mas o do backend é o scaffolding do Laravel e as dependências dele não estão instaladas. A pista
-está no cabeçalho: `> dev` é o backend, `> frontend@0.0.0 dev` é o painel. Rode `cd frontend`.
+**`sh: 1: vite: not found`** — você está em `backend/`, não em `frontend/`. As duas pastas têm um
+script `dev`, mas o do backend é o scaffolding do Laravel e não tem dependências instaladas. No
+cabeçalho, `> dev` é o backend e `> frontend@0.0.0 dev` é o painel.
 
-**`npm warn EBADENGINE` no install, ou o CLI do shadcn-vue falhando**
-Node abaixo de 22. Veja os requisitos mínimos acima. Depois de trocar de versão, rode `npm ci` de
-novo — há dependências com binário compilado.
+**`npm warn EBADENGINE`, ou o CLI do shadcn-vue falhando** — Node abaixo de 22. Depois de trocar de
+versão, rode `npm ci` de novo.
 
-**"Port 5173 is in use"**
-O Vite sobe na 5174 sozinho e avisa qual porta usou. Para fixar outra: `npm run dev -- --port 3000`.
+**"Port 5173 is in use"** — o Vite sobe na 5174 e avisa qual porta usou. Para fixar outra:
+`npm run dev -- --port 3000`.
 
-**O `.env.example` parece não existir**
-Ele começa com ponto, então é um arquivo oculto: `ls` não mostra, só `ls -a`. O `cp .env.example .env`
-funciona de qualquer forma. Para confirmar o que está versionado, sem depender do que o `ls` exibe:
-`git ls-tree origin/main --name-only -- frontend/`.
+**O `.env.example` não aparece no `ls`** — é arquivo oculto, só aparece com `ls -a`. O `cp` funciona
+normalmente.
 
-**O painel abre mas só mostra o alerta de falha**
-O backend não está no ar, ou está em outra porta. O proxy de desenvolvimento aponta para
-`API_PROXY_TARGET` (padrão `http://localhost:8000`), que precisa casar com o `APP_PORT` do
-`backend/.env`.
+**O painel abre mas só mostra o alerta de falha** — o backend não está no ar, ou está em outra porta.
+O proxy aponta para `API_PROXY_TARGET` (padrão `http://localhost:8000`), que precisa casar com o
+`APP_PORT` do `backend/.env`.
 
 ---
 
 ## Instalando o backend
 
-**Em breve.** O resumo do ambiente local (Sail, workers, scheduler, Mailpit) está em
-[Ambiente local](#ambiente-local), no fim deste documento.
+Em breve. Por ora, o resumo do ambiente local (Sail, workers, scheduler, Mailpit) está em
+[Ambiente local](#ambiente-local).
 
 ---
 
@@ -497,7 +471,7 @@ Descartado SSE/WebSocket: o ganho real é pequeno diante do custo de mais um ser
 
 ### Frontend (`frontend/`)
 
-A instalação está em [Instalando o painel do zero](#instalando-o-painel-do-zero). Esta seção é o desenho.
+A instalação está em [Instalando o painel](#instalando-o-painel). Esta seção é o desenho.
 
 Em dev o painel chama `/api` na própria origem e o **proxy do Vite** encaminha para o backend (`API_PROXY_TARGET`, padrão `http://localhost:8000` — precisa casar com o `APP_PORT` do `backend/.env`). Assim não há CORS no caminho. Em produção, aponte `VITE_API_BASE_URL` para a URL real da API.
 
