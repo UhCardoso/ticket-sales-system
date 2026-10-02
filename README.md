@@ -24,7 +24,7 @@ Para rodar o painel:
 
 ```bash
 # 1. clonar o repositório
-git clone -b git@github.com:UhCardoso/ticket-sales-system.git
+git clone git@github.com:UhCardoso/ticket-sales-system.git
 
 # 2. entrar na pasta do painel
 cd ticket-sales-system/frontend
@@ -43,9 +43,9 @@ Abra **http://localhost:5173** — a rota `/` redireciona para `/painel`.
 
 Notas sobre os passos:
 
-- **O `-b feature/screen-panel` não é opcional.** O painel vive nessa branch; a branch padrão do
-  repositório não tem o `frontend/` nesse estado. Se preferir HTTPS ao SSH, troque a URL por
-  `https://github.com/UhCardoso/ticket-sales-system.git` — o repositório é privado, então de
+- **O clone já vem na branch certa.** A branch padrão do repositório é a `main`, que tem o projeto
+  completo — não precisa passar `-b`. Se preferir HTTPS ao SSH, troque a URL por
+  `https://github.com/UhCardoso/ticket-sales-system.git`; o repositório é privado, então de
   qualquer forma é preciso ter acesso a ele.
 - **`npm ci`, não `npm install`.** O `ci` instala exatamente as versões do `package-lock.json`, que
   é o que torna a instalação reproduzível. Use `npm install` só quando for mudar dependência.
@@ -90,6 +90,11 @@ novo — há dependências com binário compilado.
 
 **"Port 5173 is in use"**
 O Vite sobe na 5174 sozinho e avisa qual porta usou. Para fixar outra: `npm run dev -- --port 3000`.
+
+**O `.env.example` parece não existir**
+Ele começa com ponto, então é um arquivo oculto: `ls` não mostra, só `ls -a`. O `cp .env.example .env`
+funciona de qualquer forma. Para confirmar o que está versionado, sem depender do que o `ls` exibe:
+`git ls-tree origin/main --name-only -- frontend/`.
 
 **O painel abre mas só mostra o alerta de falha**
 O backend não está no ar, ou está em outra porta. O proxy de desenvolvimento aponta para
