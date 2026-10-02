@@ -250,8 +250,6 @@ O comando imprime, por entrega, o `external_id`, a hora do evento, o status HTTP
 | Chaves expiram (~24h) | Não expiram | O volume é de uma chave por pedido, e manter a chave preserva o rastro de auditoria. |
 | Chave única por conta autenticada | Única no sistema | Não há autenticação de comprador. A colisão de UUID v4 é desprezível. |
 
-**Implementação:** `backend/app/Services/OrderService.php`, testes em `backend/tests/Feature/CreateOrderTest.php`.
-
 > A mesma ideia, do lado de quem recebe (*Idempotent Receiver*, de *Enterprise Integration Patterns*), vale para os avisos do gateway de pagamento. Lá o papel da chave é do identificador do próprio aviso.
 
 ### Expiração de reservas
@@ -273,8 +271,6 @@ O comando imprime, por entrega, o `external_id`, a hora do evento, o status HTTP
 
 **Ambiente local.** O serviço `scheduler` do `compose.yaml` roda `php artisan schedule:work`. Sem ele, as reservas nunca expiram. Para rodar manualmente: `./vendor/bin/sail artisan orders:expire`.
 
-**Implementação:** `backend/app/Services/OrderService.php` (`expire`), `backend/app/Console/Commands/ExpireOverdueOrders.php`, testes em `backend/tests/Feature/ExpireOrdersTest.php`.
-
 ### Recebimento dos avisos — padrão Inbox (store-and-forward)
 
 **Problema.** O gateway considera falha **qualquer resposta acima de 3 segundos** e reenvia o aviso. Os efeitos de um pagamento aprovado são caros: emitir ingressos, enviar dois e-mails e registrar a venda no sistema financeiro, que sozinho leva de 2 a 5 segundos. Fazer isso dentro do request é timeout garantido — e um timeout não é só lentidão, ele **produz uma reentrega**. Processar no request transforma cada chamada lenta em trabalho duplicado.
@@ -291,10 +287,6 @@ Esse é o **padrão Inbox** (o espelho do *Transactional Outbox*), também chama
 - A reentrega de um aviso **ainda não resolvido** também enfileira. É o caminho de recuperação se o processamento da primeira entrega não chegou ao fim.
 - Nenhum `ShouldBeUnique` no Job: ele descartaria silenciosamente um aviso que chegasse durante o processamento de outro do mesmo pedido, e o pedido ficaria com um aviso órfão. A correção é o `lockForUpdate`, não a deduplicação de Jobs — um drain repetido é um no-op barato.
 
-**Referências.** [Transactional Outbox/Inbox](https://microservices.io/patterns/data/transactional-outbox.html) e [Queue-Based Load Leveling](https://learn.microsoft.com/en-us/azure/architecture/patterns/queue-based-load-leveling).
-
-**Implementação:** `backend/app/Http/Controllers/GatewayNotificationController.php`, `backend/app/Jobs/ProcessGatewayNotification.php`.
-
 ### Avisos repetidos — padrão Idempotent Receiver
 
 **Problema.** O mesmo aviso pode ser entregue mais de uma vez, seja por reenvio do gateway, seja porque ele não recebeu a resposta da aplicação em 3s. Aplicar duas vezes uma aprovação venderia o estoque duas vezes, somaria a receita duas vezes e emitiria ingressos duplicados.
@@ -304,32 +296,6 @@ Esse é o **padrão Inbox** (o espelho do *Transactional Outbox*), também chama
 - Inserção nova: o aviso é registrado e enfileirado.
 - Reentrega: a gravação viola o índice único, a exceção é capturada e a API devolve o aviso já registrado com `200`. Nenhum efeito é aplicado de novo.
 - **A garantia é do banco, não de um `if (existe)`** — duas reentregas simultâneas passariam pela checagem juntas.
-
-**Referências.** [*Idempotent Receiver*](https://www.enterpriseintegrationpatterns.com/patterns/messaging/IdempotentReceiver.html), de *Enterprise Integration Patterns* (Hohpe & Woolf); em sistemas de fila o mesmo padrão aparece como *Idempotent Consumer*.
-
-**Implementação:** `backend/app/Services/GatewayNotificationService.php` (`record`), teste `the same notification delivered twice is applied once`.
-
-### Avisos fora de ordem — marca d'água e replay por `occurred_at`
-
-**Problema.** Deduplicar garante "cada aviso uma vez"; **não** garante "na ordem certa". Este é um problema separado, e é onde mais se escorrega. Os avisos podem chegar fora da ordem em que aconteceram — por isso cada um traz a própria data/hora. Um `rejected` antigo chegando depois de um `approved` novo rebaixaria um pedido já pago.
-
-**Solução.** Duas peças, ambas necessárias:
-
-1. **Marca d'água** (*high-water mark*). `orders.last_notification_at` guarda o `occurred_at` do último aviso aplicado. Aviso mais antigo que isso é **registrado e não aplicado**, com `discard_reason = older_than_last_applied`. Decidir o estado pela data do evento, e não pela ordem de chegada, é resolução de conflito por *Last-Write-Wins*.
-
-2. **Replay dos não aplicados.** A marca d'água sozinha tem um furo real. Se `approved` (t1) e `refunded` (t2) invertem na rede, o `refunded` chega primeiro com o pedido em `pending` — e `pending → refunded` é transição inválida. Descartá-lo faria o pedido terminar **`paid` enquanto o gateway diz reembolsado**.
-
-   Por isso o processamento não olha só o aviso que chegou: ele aplica **todos os avisos ainda não resolvidos daquele pedido, em ordem de `occurred_at`**. No exemplo, ao processar `approved` (t1) o replay encontra o `refunded` (t2) parado e aplica os dois em sequência — `pending → paid → refunded` — com os efeitos de estoque corretos em cada passo. É um *fold* sobre o log de avisos, a mesma ideia de projeção de event sourcing, em escala trivial: são um a três avisos por pedido.
-
-**Aviso adiantado x aviso incoerente.** Um aviso cuja transição é inválida só continua pendente enquanto o pedido está `pending`, o único estado que ainda pode avançar. Em qualquer estado final, nenhum aviso futuro tornaria a transição possível, então ele é descartado com `discard_reason = order_status_does_not_allow` e registrado em log.
-
-**Onde a marca d'água e o marcador de aplicação são gravados.** Na **mesma transação** da mudança de estado. Se fossem escritas separadas, uma falha entre elas faria o aviso ser reprocessado contra um pedido que já mudou — e ser descartado como incoerente.
-
-**Limitação conhecida.** Uma aprovação que chega depois de a reserva ter expirado (o pagamento saiu, mas o estoque já voltou ao lote e pode ter sido vendido a outra pessoa) é registrada, descartada e logada como `warning`. O tratamento correto seria iniciar um reembolso no gateway, o que exige uma capacidade que o gateway simulado não tem.
-
-**Referências.** [*High-Water Mark*](https://martinfowler.com/articles/patterns-of-distributed-systems/high-watermark.html), em *Patterns of Distributed Systems*; *Last-Write-Wins* como resolução de conflito, em *Designing Data-Intensive Applications* (Kleppmann, cap. 5).
-
-**Implementação:** `backend/app/Services/GatewayNotificationService.php` (`apply`, `settle`), `Order::hasNewerNotificationThan()`, testes `older notification arriving later does not overwrite newer state` e `refund delivered before the approval still ends refunded`.
 
 ### Reembolso — transação de compensação
 
@@ -346,11 +312,7 @@ Esse é o **padrão Inbox** (o espelho do *Transactional Outbox*), também chama
 - A transição de status é validada **antes** de mexer nos contadores. Na ordem inversa, um reembolso sobre pedido não pago tentaria decrementar `sold_quantity` de zero e bateria na coluna `unsigned` antes de a regra de negócio ser consultada.
 - Os ingressos são **invalidados, não apagados**: um ingresso reembolsado apresentado na portaria precisa ser recusado com motivo, não "não existir".
 - A emissão se recusa a rodar para pedido que não está `paid`. Sem isso, um `IssueTickets` atrasado — reembolso aplicado antes da emissão, no cenário fora de ordem — criaria ingressos válidos para um pedido reembolsado.
-
-**Referências.** [Compensating Transaction](https://learn.microsoft.com/en-us/azure/architecture/patterns/compensating-transaction); o conceito vem de *Sagas* (Garcia-Molina & Salem, 1987).
-
-**Implementação:** `backend/app/Services/OrderService.php` (`refund`), `backend/app/Models/TicketBatch.php` (`returnSale`), testes em `backend/tests/Feature/RefundTest.php`.
-
+  
 ### Efeitos pós-pagamento — um Job por efeito
 
 **Problema.** Um pagamento aprovado dispara quatro efeitos: emitir os ingressos (um código único por ingresso, com QR Code em PDF), enviar o comprovante, enviar os ingressos e registrar a venda no sistema financeiro. Todos podem falhar ou demorar, e o financeiro falha em ~20% das chamadas. Se fossem um Job só, o retry causado pelo financeiro reenviaria os e-mails.
@@ -367,9 +329,6 @@ markAsPaid (commit) ──┬── IssueTickets ──> SendTicketsEmail   (cha
 - **`afterCommit()`.** O `markAsPaid` roda dentro da transação que aplica o aviso do gateway. Sem `afterCommit`, o worker poderia pegar o Job antes do commit e ler o pedido ainda `pending`.
 - **Único encadeamento:** emissão → e-mail de ingressos, porque é uma dependência real de dados. Os demais efeitos são independentes e rodam em paralelo.
 - **Pedido reembolsado antes dos Jobs rodarem.** Os e-mails não saem: os ingressos já foram invalidados. O registro no financeiro sai, porque a venda aconteceu.
-- **O PDF é gerado na hora do envio, não salvo em disco.** Os códigos no banco são a fonte da verdade e o PDF é derivado deles, então não há arquivo para manter sincronizado em retry ou reembolso. Os códigos são UUID v4, impossíveis de adivinhar, o que importa porque o QR Code é a credencial de entrada.
-
-**Implementação:** `backend/app/Services/OrderService.php` (`markAsPaid`, `dispatchPendingEffects`), `backend/app/Jobs/`, `backend/app/Tickets/TicketPdf.php`, testes em `backend/tests/Feature/PostPaymentEffectsTest.php`.
 
 ### Efeitos sem repetição — marcador por efeito e idempotência nas duas pontas
 
@@ -392,8 +351,6 @@ Além disso, o middleware `WithoutOverlapping` por pedido impede que duas cópia
 - **E-mail:** SMTP não tem chave de idempotência. Esse caso tem tratamento próprio, na seção seguinte.
 
 `payment_reference` funciona como o mesmo tipo de marcador para a abertura da cobrança no gateway: uma compra repetida reaproveita a cobrança existente em vez de abrir uma segunda.
-
-**Implementação:** `backend/app/Jobs/RegisterInFinancialSystem.php`, `backend/app/Contracts/FinancialSystemInterface.php`, testes `rerunning the jobs does not repeat any effect` e `financial retry after a lost success does not register twice`.
 
 ### E-mail nunca duplicado — reivindicação e estado "em dúvida"
 
@@ -419,13 +376,7 @@ Além disso, o middleware `WithoutOverlapping` por pedido impede que duas cópia
 
 **Por que esta escolha.** O requisito diz "nunca" receber e-mail repetido, e isso é cumprido ao pé da letra. O caso raro e ambíguo não vira um e-mail duplicado nem um e-mail perdido em silêncio: vira um item visível para alguém conferir no log do provedor.
 
-**Alternativas descartadas:**
-- **API de e-mail com chave de idempotência** (alguns provedores transacionais aceitam `Idempotency-Key`). Resolveria de fato, mas não funciona com Mailpit/SMTP e amarra o projeto a um provedor.
-- **`Message-ID` determinístico.** O Gmail deduplica mensagens com o mesmo `Message-ID`, mas isso é comportamento de implementação, não do padrão, e o Mailpit mostra as duas. É mitigação, não garantia.
-
 **Mailables não são `ShouldQueue`.** Se fossem, o `send()` só enfileiraria outro Job, e o marcador seria gravado sem o e-mail ter saído. Quem é enfileirado e faz o retry é o Job que envia.
-
-**Implementação:** `backend/app/Jobs/SendOrderEmail.php` (base dos dois e-mails), `Order::claimEmail()`, testes em `backend/tests/Feature/EmailInDoubtTest.php`.
 
 ### Sistema financeiro lento e instável — retry com backoff e fila isolada
 
@@ -433,15 +384,11 @@ Além disso, o middleware `WithoutOverlapping` por pedido impede que duas cópia
 
 **Solução.**
 
-- **Retry com backoff crescente.** 10 tentativas, com esperas de 5s, 15s, 30s, 60s, 2 min, 5 min e depois 10 min. Com 20% de falha, a chance de esgotar todas é 0,2¹⁰, cerca de 1 em 10 milhões. As esperas somam ~40 minutos, o que permite atravessar uma indisponibilidade prolongada.
-- **Fila própria (`financial`) com worker dedicado.** Com uma fila só, cada chamada prenderia o worker por ~3,5s, e os e-mails e a emissão de ingressos de todas as vendas esperariam atrás do financeiro. Isolado, um financeiro lento ou fora do ar não atrasa nenhum e-mail. É o padrão *Bulkhead*: compartimentar para que um componente lento não afunde os outros. Para ganhar vazão, basta escalar só esse worker: `sail up -d --scale worker-financial=3`.
+- **Retry com backoff crescente.** 10 tentativas, com esperas de 5s, 15s, 30s, 60s, 2 min, 5 min e depois 10 min.
+- **Fila própria (`financial`) com worker dedicado.** Com uma fila só, cada chamada prenderia o worker por ~3,5s, e os e-mails e a emissão de ingressos de todas as vendas esperariam atrás do financeiro. Isolado, um financeiro lento ou fora do ar não atrasa nenhum e-mail.
 - **Esgotou as tentativas:** log `critical` e a reconciliação (seção seguinte) tenta de novo. A venda nunca some em silêncio.
 
 **O simulador.** `SimulatedFinancialSystem` dorme entre `FINANCIAL_MIN_DELAY_MS` e `FINANCIAL_MAX_DELAY_MS` (padrão 2000–5000) e falha em `FINANCIAL_FAILURE_RATE` das chamadas (padrão 0.2). **Metade das falhas acontece depois de registrar a venda**, simulando a resposta perdida no caminho de volta. É o caso que só a chave de idempotência protege, e ele precisa acontecer para a garantia ser exercitada de verdade. Nos testes, ele é trocado por um dublê determinístico (`tests/Doubles/FakeFinancialSystem.php`): instantâneo e falhando só quando o teste manda.
-
-**Referências.** [Retry](https://learn.microsoft.com/en-us/azure/architecture/patterns/retry) e [Bulkhead](https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead).
-
-**Implementação:** `backend/app/Jobs/RegisterInFinancialSystem.php`, `backend/app/Financial/SimulatedFinancialSystem.php`, teste `unstable financial system ends with the sale registered once`.
 
 ### Nenhuma venda sem registro — reconciliação periódica
 
@@ -465,8 +412,6 @@ O comando `orders:reconcile` roda **a cada 5 minutos** pelo scheduler:
 - **Por que 60 minutos:** é mais que o ciclo completo de retries do financeiro (~40 min), para a reconciliação não competir com as tentativas normais.
 - **Por que varredura e não só `failed_jobs`:** `failed_jobs` só registra o Job que falhou, não o que se perdeu. A varredura se autocorrige a partir do estado do banco, independentemente do que aconteceu com a fila. É o mesmo raciocínio da expiração de reservas.
 
-**Implementação:** `backend/app/Console/Commands/ReconcilePostPaymentEffects.php`, `Order::scopeWithPendingEffects()`, testes em `backend/tests/Feature/ReconcilePostPaymentEffectsTest.php`.
-
 ### Painel de vendas — leitura em cache, nunca pelo caminho do lock
 
 O cenário declarado é ~30 pessoas com o painel aberto atualizando a cada poucos segundos, enquanto milhares compram. O mesmo dado tem então dois requisitos opostos, e confundi-los derruba o sistema no pico:
@@ -482,47 +427,7 @@ Se o painel lesse pelo caminho do lock, 30 clientes em polling entrariam na fila
 - **Sem invalidação de cache**, só TTL. O painel tolera a defasagem; invalidar a cada venda devolveria a carga ao banco no pico, que é o problema que o cache existe para resolver.
 - **Resource separado** (`EventSalesSummaryResource`) do resource do caminho de compra (`TicketBatchResource`), que deliberadamente esconde os contadores. São dois consumidores com contratos diferentes.
 
-**Implementação:** `backend/app/Services/SalesDashboardService.php`, `backend/app/Http/Controllers/SalesDashboardController.php`, testes em `backend/tests/Feature/SalesDashboardTest.php`.
-
 Descartado SSE/WebSocket: o ganho real é pequeno diante do custo de mais um serviço no ambiente local.
-
-### Frontend (`frontend/`)
-
-A instalação está em [Instalando o painel](#instalando-o-painel). Esta seção é o desenho.
-
-Em dev o painel chama `/api` na própria origem e o **proxy do Vite** encaminha para o backend (`API_PROXY_TARGET`, padrão `http://localhost:8000` — precisa casar com o `APP_PORT` do `backend/.env`). Assim não há CORS no caminho. Em produção, aponte `VITE_API_BASE_URL` para a URL real da API.
-
-| Variável | Para que |
-|---|---|
-| `VITE_API_BASE_URL` | Base da API (`/api` em dev) |
-| `API_PROXY_TARGET` | Destino do proxy de dev |
-| `VITE_POLL_INTERVAL` | Intervalo do polling, em ms (padrão 5000) |
-| `VITE_API_TIMEOUT` | Timeout de cada request, em ms |
-
-**Camadas** — `view → composable → service → AxiosClient`, cada uma só conhecendo a de baixo. A regra de ouro: **a view nunca fala com o axios.** Quem fala é sempre um service, e `services/` é a única camada que importa a instância do axios.
-
-```
-frontend/src/
-├── main.ts · App.vue            Bootstrap e o <RouterView />
-├── config/                      AxiosClient.ts (instância única + ApiError) · Router.ts
-├── models/                      Contratos da API; genéricos em shared/
-├── services/                    Uma classe por recurso da API
-├── composables/                 useSalesDashboard · usePolling · useNow
-├── components/                  ui/ (shadcn) · common/ (domínio) · charts/ (medidor)
-├── views/                       Uma pasta por área: Dashboard/
-├── utils/                       formatMoney.ts · sumMoney.ts · cn.ts
-└── assets/css/main.css          Tailwind v4 e os tokens do tema
-```
-
-| Camada | Papel |
-|---|---|
-| `config/` | Infraestrutura: `AxiosClient.ts` (instância única + interceptor, normaliza falha em `ApiError` separando `aborted` do resto) e `Router.ts` (rotas com `import()` dinâmico). |
-| `models/` | Só os tipos do que entra e sai da API, em snake_case como o Laravel manda. Sem comportamento. Genéricos em `models/shared/`. |
-| `services/` | Uma classe por recurso da API. Conhece path, verbo e payload; devolve `response.data`. É a única camada que importa o `AxiosClient`. |
-| `composables/` | Polling e os derivados de apresentação (frações da barra, esgotado, totais globais). Instancia o service. |
-| `components/` | Por natureza, não por tela: `ui/` (primitivos shadcn-vue), `common/` (compostos de domínio), `charts/` (o medidor). |
-| `views/` | Uma pasta por área (`Dashboard/`). Monta a tela a partir do composable e dos componentes. |
-| `utils/` | Funções puras, sem Vue e sem estado: `formatMoney.ts`, `sumMoney.ts`, `cn.ts`. |
 
 **Decisões do painel:**
 
