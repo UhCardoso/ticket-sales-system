@@ -232,7 +232,7 @@ O comando imprime, por entrega, o `external_id`, a hora do evento, o status HTTP
 
 **Problema.** Duplo clique, timeout de rede ou retry automático fazem a mesma compra chegar mais de uma vez. Sem proteção, cada requisição criaria um pedido e reservaria estoque de novo. O servidor não consegue distinguir "requisição repetida" de "nova compra com os mesmos dados", porque o conteúdo é idêntico.
 
-**Solução.** Adotamos o padrão **Idempotency Key**: o cliente gera um UUID por intenção de compra e o envia no header `Idempotency-Key` em todas as tentativas. Quem sabe se duas requisições são a mesma tentativa é o cliente, então é ele que identifica.
+**Solução.** Adotei o padrão **Idempotency Key**: o cliente gera um UUID por intenção de compra e o envia no header `Idempotency-Key` em todas as tentativas. Quem sabe se duas requisições são a mesma tentativa é o cliente, então é ele que identifica.
 
 - **Chave nova:** o pedido é criado (`201`).
 - **Chave repetida com os mesmos dados:** nada é criado e a API devolve o pedido original (`200`). O cliente pode repetir a chamada com segurança.
@@ -297,7 +297,7 @@ Esse é o **padrão Inbox** (o espelho do *Transactional Outbox*), também chama
 
 ### Avisos repetidos — padrão Idempotent Receiver
 
-**Problema.** O mesmo aviso pode ser entregue mais de uma vez, seja por reenvio do gateway, seja porque ele não recebeu nossa resposta em 3s. Aplicar duas vezes uma aprovação venderia o estoque duas vezes, somaria a receita duas vezes e emitiria ingressos duplicados.
+**Problema.** O mesmo aviso pode ser entregue mais de uma vez, seja por reenvio do gateway, seja porque ele não recebeu a resposta da aplicação em 3s. Aplicar duas vezes uma aprovação venderia o estoque duas vezes, somaria a receita duas vezes e emitiria ingressos duplicados.
 
 **Solução.** É o inverso da idempotência da compra: lá quem gera a chave é o cliente, porque só ele sabe se duas requisições são a mesma intenção; aqui **o remetente já entrega a chave pronta** — cada aviso traz seu identificador próprio. Então não há nada a inventar: `gateway_notifications.external_id` tem **índice único**.
 
@@ -388,7 +388,7 @@ Além disso, o middleware `WithoutOverlapping` por pedido impede que duas cópia
 
 **O furo que o marcador sozinho não fecha.** Entre "o serviço externo aceitou" e "o marcador foi gravado" existe uma janela. Se o worker morrer ali, o retry encontra o marcador vazio e repete. Não dá para colocar a chamada externa e a gravação no banco na mesma transação. A saída é ter idempotência **também do lado de quem recebe**:
 
-- **Financeiro:** o id do pedido vai como chave de idempotência, e o sistema financeiro devolve o registro original em vez de criar outro. É o mesmo *Idempotent Receiver* dos avisos do gateway, agora com a gente no papel de remetente. Com isso a garantia fica completa.
+- **Financeiro:** o id do pedido vai como chave de idempotência, e o sistema financeiro devolve o registro original em vez de criar outro. É o mesmo *Idempotent Receiver* dos avisos do gateway, agora com a aplicação no papel de remetente. Com isso a garantia fica completa.
 - **E-mail:** SMTP não tem chave de idempotência. Esse caso tem tratamento próprio, na seção seguinte.
 
 `payment_reference` funciona como o mesmo tipo de marcador para a abertura da cobrança no gateway: uma compra repetida reaproveita a cobrança existente em vez de abrir uma segunda.
