@@ -19,28 +19,12 @@ Para rodar o painel:
 | **Git** | qualquer recente | clonar o repositório |
 | **Node.js** | **22.22+** ou **24.15+** | é o `engines` do `package.json`; algumas dependências exigem `>=22` |
 | **npm** | 10+ | vem junto com o Node |
-| **Disco** | ~400 MB livres | o `node_modules` do painel tem ~370 MB |
-| **Navegador** | Chrome, Firefox, Edge ou Safari atual | — |
-
-Não precisa de Docker, PHP nem banco de dados para subir **só** o painel.
-
-> **Node 20 não serve.** O servidor de desenvolvimento até sobe, mas o `npm install` acusa
-> `EBADENGINE` e o CLI do shadcn-vue não roda (depende de `undici@8`, que exige 22.19+). Se você
-> usa nvm:
->
-> ```bash
-> nvm install 22
-> nvm use 22
-> node -v        # precisa mostrar v22.x
-> ```
-
----
 
 ## Instalando o painel do zero
 
 ```bash
 # 1. clonar o repositório
-git clone -b feature/screen-panel git@github.com:UhCardoso/ticket-sales-system.git
+git clone -b git@github.com:UhCardoso/ticket-sales-system.git
 
 # 2. entrar na pasta do painel
 cd ticket-sales-system/frontend
