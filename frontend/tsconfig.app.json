@@ -1,12 +1,14 @@
 {
   "extends": "@vue/tsconfig/tsconfig.dom.json",
-  "include": ["env.d.ts", "src/**/*", "src/**/*.vue"],
+  "include": ["src/**/*", "src/**/*.vue"],
   "exclude": ["src/**/__tests__/*"],
   "compilerOptions": {
     // Extra safety for array and object lookups, but may have false positives.
     "noUncheckedIndexedAccess": true,
 
-    // Path mapping for cleaner imports.
+    // Path mapping for cleaner imports. Sem "baseUrl": depreciado no TS 6, e os paths
+    // relativos ao próprio tsconfig já resolvem. O tsconfig.json raiz ainda o declara
+    // porque o CLI do shadcn-vue procura o alias lá, mas aquele arquivo não compila nada.
     "paths": {
       "@/*": ["./src/*"]
     },

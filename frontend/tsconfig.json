@@ -7,5 +7,13 @@
     {
       "path": "./tsconfig.app.json"
     }
-  ]
+  ],
+  // Não compila nada (files: []), mas é onde ferramentas externas — como o CLI do
+  // shadcn-vue — procuram o alias de import. O que vale na compilação é o tsconfig.app.json.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  }
 }

@@ -22,7 +22,7 @@ class TicketBatchResource extends JsonResource
             'event' => [
                 'id' => $this->event->id,
                 'name' => $this->event->name,
-                'date_time' => $this->event->date_time,
+                'date_time' => $this->event->date_time->toIso8601String(),
             ],
         ];
     }
